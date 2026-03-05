@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # output.sh — Logging, colour, and formatting helpers
 
-# Colour constants (only when stdout is a TTY)
-if [[ -t 1 ]]; then
+# Colour constants (only when stderr is a TTY)
+if [[ -t 2 ]]; then
   RED='\033[0;31m'
   GREEN='\033[0;32m'
   YELLOW='\033[1;33m'
