@@ -31,43 +31,56 @@ find_namespace_dir() {
 # cmd_init — first-time setup wizard
 cmd_init() {
   local conf="$HOME/.server-manager.conf"
-  
+
   if [[ -f "$conf" ]]; then
-    warn "Config already exists at $conf"
-    info "Current settings:"
+    section "Configuration"
     cat "$conf"
+    info ""
+    warn "Config already exists at $conf"
+    info "  Edit it directly or delete it to reinitialise."
     return
   fi
-  
-  info "Welcome to server-manager!"
-  info
-  
+
+  section "Welcome to server-manager"
+  info ""
+  info "  This wizard creates ${conf}."
+  info "  Press Enter to accept the default shown in brackets."
+  info ""
+
+  step "Paths"
   local root ssh_dir gc_main gc_server
-  root="$(prompt_input "Server root folder" "$HOME/Server")"
-  ssh_dir="$(prompt_input "SSH directory" "$HOME/.ssh")"
-  gc_main="$(prompt_input "Main gitconfig" "$HOME/.gitconfig")"
-  gc_server="$(prompt_input "Server gitconfig" "$HOME/.gitconfig-server")"
-  
+  root="$(prompt_input      "Projects root folder" "$HOME/Server")"
+  ssh_dir="$(prompt_input   "SSH keys directory  " "$HOME/.ssh")"
+  gc_main="$(prompt_input   "Main gitconfig      " "$HOME/.gitconfig")"
+  gc_server="$(prompt_input "Server gitconfig    " "$HOME/.gitconfig-server")"
+
   cat > "$conf" <<EOF
 SERVER_ROOT="$root"
 SSH_DIR="$ssh_dir"
 GITCONFIG_MAIN="$gc_main"
 GITCONFIG_SERVER="$gc_server"
 EOF
-  
-  ok "Created $conf"
-  
-  # Source the new config
+
+  # Source the new config so the rest of this run uses updated paths
+  # shellcheck disable=SC1090
   source "$conf"
-  
-  # Ensure main git include
+
+  info ""
+  ok "Created $conf"
+
   ensure_main_git_include
-  
-  # Offer to create first namespace
+
+  info ""
+  step "First namespace"
   if prompt_yn "Create your first namespace now?"; then
     local first_name
-    first_name="$(prompt_input "Namespace name")"
+    first_name="$(prompt_input "Namespace name" "")"
     cmd_new "$first_name"
+  else
+    info ""
+    info "  You can create one later with:"
+    info "    server new <FolderName>"
+    info ""
   fi
 }
 
@@ -191,62 +204,88 @@ cmd_check() {
 # cmd_list — show all namespaces with status
 cmd_list() {
   mkdir -p "$SERVER_ROOT"
-  
+
   local count=0
   local missing_count=0
-  
-  section "Namespaces"
-  
+  local rows=()
+
+  # Collect data first
   for d in "$SERVER_ROOT"/*/; do
     [[ -d "$d" ]] || continue
-    
-    local folder ns dir
+
+    local folder ns dir cfg
     folder="$(basename "${d%/}")"
     ns="$(norm_ns "$folder")"
     dir="${d%/}"
-    
-     # Check each component
-     local folder_ok=0 ssh_ok=0 git_ok=0 include_ok=0 identity_ok=0
-     local cfg
-     cfg="$(get_namespace_gitconfig "$ns")"
-     
-     [[ -d "$dir" ]] && folder_ok=1
-     [[ -f "$SSH_DIR/$ns" ]] && ssh_ok=1
-     [[ -f "$cfg" ]] && git_ok=1
-     
-     if [[ -f "$cfg" ]]; then
-       local cur_name cur_email
-       cur_name="$(git config --file "$cfg" user.name  2>/dev/null || true)"
-       cur_email="$(git config --file "$cfg" user.email 2>/dev/null || true)"
-       [[ -n "$cur_name" && -n "$cur_email" ]] && identity_ok=1
-     fi
-    
-    grep -Fq "gitdir:$dir/" "$GITCONFIG_SERVER" 2>/dev/null && include_ok=1
-    
-    # Determine status
-    local status_mark="✓"
-    if [[ $folder_ok -eq 0 || $ssh_ok -eq 0 || $git_ok -eq 0 || $include_ok -eq 0 || $identity_ok -eq 0 ]]; then
-      status_mark="!"
-      ((missing_count++))
+    cfg="$(get_namespace_gitconfig "$ns")"
+
+    local folder_ok=0 ssh_ok=0 git_ok=0 identity_ok=0 include_ok=0
+    [[ -d "$dir" ]]       && folder_ok=1
+    [[ -f "$SSH_DIR/$ns" ]] && ssh_ok=1
+    [[ -f "$cfg" ]]         && git_ok=1
+
+    if [[ -f "$cfg" ]]; then
+      local cur_name cur_email
+      cur_name="$(git config  --file "$cfg" user.name  2>/dev/null || true)"
+      cur_email="$(git config --file "$cfg" user.email 2>/dev/null || true)"
+      [[ -n "$cur_name" && -n "$cur_email" ]] && identity_ok=1
     fi
-    
-    printf "  [%s] %-20s " "$status_mark" "$ns"
-    [[ $folder_ok -eq 1 ]] && printf "folder " || printf "       "
-    [[ $ssh_ok -eq 1 ]] && printf "ssh " || printf "    "
-    [[ $git_ok -eq 1 ]] && printf "git " || printf "    "
-    [[ $identity_ok -eq 1 ]] && printf "identity " || printf "         "
-    [[ $include_ok -eq 1 ]] && printf "routing" || printf "       "
-    printf "\n"
-    
+
+    grep -Fq "gitdir:$dir/" "$GITCONFIG_SERVER" 2>/dev/null && include_ok=1
+
+    local all_ok=0
+    [[ $folder_ok -eq 1 && $ssh_ok -eq 1 && $git_ok -eq 1 && $identity_ok -eq 1 && $include_ok -eq 1 ]] && all_ok=1
+    [[ $all_ok -eq 0 ]] && ((missing_count++))
+
+    rows+=("$ns|$folder_ok|$ssh_ok|$git_ok|$identity_ok|$include_ok|$all_ok")
     ((count++))
   done
-  
+
+  section "Namespaces"
+  info ""
+
   if [[ $count -eq 0 ]]; then
-    warn "No namespaces found"
-  else
-    info
-    [[ $missing_count -eq 0 ]] && ok "All $count namespace$([ $count -eq 1 ] && echo || echo 's') healthy" || warn "$missing_count namespace$([ $missing_count -eq 1 ] && echo || echo 's') need attention"
+    warn "No namespaces found. Create one with: server new <FolderName>"
+    return
   fi
+
+  # Header
+  printf "  ${BOLD}  %-18s  %-6s  %-5s  %-14s  %s${RESET}\n" \
+    "NAME" "SSH" "CONFIG" "IDENTITY" "ROUTING"
+  printf "  ${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────────"
+
+  for row in "${rows[@]}"; do
+    IFS='|' read -r ns folder_ok ssh_ok git_ok identity_ok include_ok all_ok <<< "$row"
+
+    # Status icon
+    local icon
+    [[ $all_ok -eq 1 ]] && icon="${GREEN}✓${RESET}" || icon="${YELLOW}!${RESET}"
+
+    # Name with colour
+    local name_col
+    [[ $all_ok -eq 1 ]] && name_col="${GREEN}${BOLD}${ns}${RESET}" || name_col="${YELLOW}${BOLD}${ns}${RESET}"
+
+    # Each check column: tick or cross, padded to fixed width without colour in the padding
+    local c_ssh c_git c_id c_route
+    [[ $ssh_ok      -eq 1 ]] && c_ssh="${GREEN}✓${RESET}"   || c_ssh="${RED}✗${RESET}"
+    [[ $git_ok      -eq 1 ]] && c_git="${GREEN}✓${RESET}"   || c_git="${RED}✗${RESET}"
+    [[ $identity_ok -eq 1 ]] && c_id="${GREEN}✓${RESET}"    || c_id="${RED}✗${RESET}"
+    [[ $include_ok  -eq 1 ]] && c_route="${GREEN}✓${RESET}" || c_route="${RED}✗${RESET}"
+
+    # Use fixed-width plain padding; ANSI codes don't affect terminal width for the text itself
+    printf "  %b  %-18s  %-6b  %-7b  %-15b  %b\n" \
+      "$icon" "$ns" "$c_ssh" "$c_git" "$c_id" "$c_route"
+  done
+
+  printf "  ${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────────"
+  info ""
+
+  if [[ $missing_count -eq 0 ]]; then
+    ok "All $count namespace$([ $count -eq 1 ] && echo '' || echo 's') healthy"
+  else
+    warn "$missing_count namespace$([ $missing_count -eq 1 ] && echo '' || echo 's') need attention — run: server ensure <name>"
+  fi
+  info ""
 }
 
 # cmd_rename — rename a namespace
