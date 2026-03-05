@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# server — workspace-based SSH identity manager for Git
+# Entry point that sources all lib modules and dispatches commands
+
+set -euo pipefail
+
+# =========================
+# Config loading
+# =========================
+
+CONFIG_FILE="$HOME/.server-manager.conf"
+
+# Defaults
+SERVER_ROOT="$HOME/Server"
+SSH_DIR="$HOME/.ssh"
+GITCONFIG_MAIN="$HOME/.gitconfig"
+GITCONFIG_SERVER="$HOME/.gitconfig-server"
+
+# Load user config if it exists
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+# =========================
+# Find and source lib modules
+# =========================
+
+# Try to find lib directory (relative to this script or via PATH)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+
+if [[ ! -d "$LIB_DIR" ]]; then
+  echo "Error: lib directory not found at $LIB_DIR" >&2
+  echo "Make sure you've installed server-manager correctly." >&2
+  exit 1
+fi
+
+# Source all lib modules
+for lib in "$LIB_DIR"/*.sh; do
+  # shellcheck disable=SC1090
+  source "$lib"
+done
+
+# =========================
+# Dependency checks
+# =========================
+
+check_command git
+check_command ssh-keygen
+
+# =========================
+# Entry point
+# =========================
+
+case "${1:-}" in
+  init)       cmd_init ;;
+  new)        [[ -n "${2:-}" ]] || die "Usage: server new <FolderName>"; cmd_new "$2" ;;
+  ensure)     [[ -n "${2:-}" ]] || die "Usage: server ensure <Name>"; cmd_ensure "$2" ;;
+  bootstrap)  cmd_bootstrap ;;
+  list)       cmd_list ;;
+  check)      [[ -n "${2:-}" ]] || die "Usage: server check <Name>"; cmd_check "$2" ;;
+  rename)     [[ -n "${2:-}" ]] || die "Usage: server rename <OldName> <NewName>"; [[ -n "${3:-}" ]] || die "Usage: server rename <OldName> <NewName>"; cmd_rename "$2" "$3" ;;
+  rm)         [[ -n "${2:-}" ]] || die "Usage: server rm <Name>"; cmd_rm "$2" ;;
+  config)     cmd_config ;;
+  -h|--help|"") show_help ;;
+  *)
+    die "Unknown command: $1"
+    ;;
+esac

@@ -1,0 +1,4 @@
+SERVER_ROOT="$HOME/Server"
+SSH_DIR="$HOME/.ssh"
+GITCONFIG_MAIN="$HOME/.gitconfig"
+GITCONFIG_SERVER="$HOME/.gitconfig-server"
